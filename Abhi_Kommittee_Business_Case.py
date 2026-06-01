@@ -513,10 +513,10 @@ def compute_forecast(templates, glob, months):
 
     for m in range(1, months+1):
         agg = dict(cum_pools=0, paying_members=0, total_float=0,
-                   gross_fee=0, base_nii=0, fee_nii=0, pg_nii=0, total_nii=0,
-                   total_cg=0, def_loss=0, net_def_loss=0, def_fees=0,
-                   total_rev=0, gross_profit=0,
-                   abhi_fee=0, bachat_fee=0, abhi_cg=0, bachat_cg=0, total_bachat=0)
+                   gross_fee=0, total_cg=0, net_def_loss=0, def_fees=0,
+                   shared_net=0,
+                   abhi_fee=0, bachat_fee=0,
+                   abhi_shared=0, bachat_shared=0, total_bachat=0)
 
         for ti, tmpl in enumerate(active):
             cp   = schedules[ti][m-1]
@@ -838,7 +838,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     unlocked = df_ms[df_ms["status"]=="UNLOCKED"]
     total_cg_all  = df["Monthly Cap Gain (Total)"].sum()
-    total_b40     = df["Bachat Cap Gain (40%)"].sum()
+    total_b40     = df["Bachat Shared Net (40%)"].sum() if "Bachat Shared Net (40%)" in df.columns else 0
     total_rel     = unlocked["bachat_40pct"].sum() if not unlocked.empty else 0
     total_fee     = df["Bachat Fee Share"].sum()
     shortfall     = total_b40 - total_rel
@@ -930,17 +930,29 @@ with tab1:
             with c_calc:
                 delta_cls = "cb-pos" if delta >= 0 else "cb-neg"
                 delta_lbl = "✓ Balanced" if abs(delta) < b40*0.05 else ("▲ Over-release" if delta>0 else "▼ Shortfall")
+                sn_period  = row.get("shared_net_period", cgp)
+                def_period = row.get("def_loss_period", 0)
                 st.markdown(f"""
                 <div class="calc-box">
-                  <div class="cb-lbl">Capital Gain Calculation</div>
+                  <div class="cb-lbl">Shared P&L Calculation (Cap Gain − Default Loss)</div>
                   <div style="margin:.6rem 0">
-                    <span class="cb-lbl">Total Cap Gain — ABHI earns (period)</span><br>
+                    <span class="cb-lbl">① Cap Gain — ABHI earns on float (period)</span><br>
                     Σ Float × {net_rate_display:.2f}% ÷ 12 over {n_months} months<br>
                     = <span class="cb-result">{fmt_pkr_full(cgp)}</span>
                   </div>
                   <div style="margin:.6rem 0">
-                    <span class="cb-lbl">Bachat's {g['bachat_share']:.0f}% Entitlement</span><br>
-                    {fmt_pkr_full(cgp)} × {g['bachat_share']:.0f}%<br>
+                    <span class="cb-lbl">② Net Default Loss shared (period)</span><br>
+                    Gross Default Loss − Recovery<br>
+                    = <span style="color:#D32F2F;font-weight:700">− {fmt_pkr_full(def_period)}</span>
+                  </div>
+                  <div style="margin:.6rem 0;padding:.5rem;background:#E8F5EE;border-radius:6px">
+                    <span class="cb-lbl">Shared Net = ① − ②</span><br>
+                    {fmt_pkr_full(cgp)} − {fmt_pkr_full(def_period)}<br>
+                    = <span class="cb-result">{fmt_pkr_full(sn_period)}</span>
+                  </div>
+                  <div style="margin:.6rem 0">
+                    <span class="cb-lbl">Bachat's {g['bachat_share']:.0f}% of Shared Net</span><br>
+                    {fmt_pkr_full(sn_period)} × {g['bachat_share']:.0f}%<br>
                     = <span class="cb-result">{fmt_pkr_full(b40)}</span>
                   </div>
                   <div style="margin:.8rem 0 .3rem 0;padding-top:.8rem;border-top:1px solid #D6EAE0">
@@ -948,7 +960,7 @@ with tab1:
                     <span class="cb-release">{fmt_pkr_full(rel)}</span>
                   </div>
                   <div>
-                    <span class="cb-lbl">Delta</span>&nbsp;
+                    <span class="cb-lbl">Delta (Release − Entitlement)</span>&nbsp;
                     <span class="{delta_cls}">PKR {delta:+,.0f} — {delta_lbl}</span>
                   </div>
                 </div>
@@ -956,10 +968,19 @@ with tab1:
 
             # Month-by-month table
             st.markdown('<div style="margin-top:.6rem;font-size:.78rem;font-weight:600;color:#005C2B">Month-by-Month Capital Gain Breakdown</div>', unsafe_allow_html=True)
-            period_df = df[(df["Month"]>prev_m)&(df["Month"]<=unlock_m)][
-                ["Month","Cumulative Pools","Total Float (PKR)",
-                 "Monthly Cap Gain (Total)","Bachat Cap Gain (40%)"]].copy()
-            period_df.columns = ["Month","Pools","Float (PKR)","Cap Gain — ABHI Earns","Bachat 40% Owed"]
+            avail_cols = ["Month","Cumulative Pools","Total Float (PKR)",
+                              "Monthly Cap Gain (Total)","Net Default Loss",
+                              "Shared Net (CG − Def Loss)","Bachat Shared Net (40%)"]
+            avail_cols = [c for c in avail_cols if c in df.columns]
+            period_df = df[(df["Month"]>prev_m)&(df["Month"]<=unlock_m)][avail_cols].copy()
+            rename_map = {
+                "Cumulative Pools":"Pools","Total Float (PKR)":"Float (PKR)",
+                "Monthly Cap Gain (Total)":"Cap Gain (ABHI)",
+                "Net Default Loss":"Default Loss",
+                "Shared Net (CG − Def Loss)":"Shared Net",
+                "Bachat Shared Net (40%)":"Bachat 40% Owed"
+            }
+            period_df.rename(columns=rename_map, inplace=True)
             period_df["Pools"] = period_df["Pools"].apply(lambda x: f"{int(x):,}")
             for c in ["Float (PKR)","Cap Gain — ABHI Earns","Bachat 40% Owed"]:
                 period_df[c] = period_df[c].apply(fmt_pkr_full)
@@ -1014,16 +1035,18 @@ with tab1:
     for _,row in df_ms.iterrows():
         is_u = row["status"]=="UNLOCKED"
         ms_tbl.append({
-            "MS #":              f"MS{int(row.ms_num)}",
-            "Pool Target":       f"{int(row.pool_target):,}",
-            "Month Unlocked":    str(int(row.unlock_month)) if is_u else "—",
-            "Period (months)":   str(int(row.months_covered)) if is_u else "—",
-            "Float at Unlock":   fmt_pkr(row.float_at_unlock) if is_u else "—",
-            "Cap Gain (Period)": fmt_pkr(row.cap_gain_period) if is_u else "—",
-            "Bachat 40% Owed":   fmt_pkr(row.bachat_40pct)   if is_u else "—",
-            "ABHI Release":      fmt_pkr(row.release_amount) if is_u else "—",
-            "Delta":             (f"PKR {row.delta:+,.0f}" if is_u else "—"),
-            "Status":            "✅ UNLOCKED" if is_u else "⏳ PENDING",
+            "MS #":                  f"MS{int(row.ms_num)}",
+            "Pool Target":           f"{int(row.pool_target):,}",
+            "Month Unlocked":        str(int(row.unlock_month)) if is_u else "—",
+            "Period (months)":       str(int(row.months_covered)) if is_u else "—",
+            "Float at Unlock":       fmt_pkr(row.float_at_unlock) if is_u else "—",
+            "Cap Gain (Period)":     fmt_pkr(row.cap_gain_period) if is_u else "—",
+            "Net Default Loss":      fmt_pkr(row.get("def_loss_period",0)) if is_u else "—",
+            "Shared Net (CG−Loss)":  fmt_pkr(row.get("shared_net_period",0)) if is_u else "—",
+            "Bachat 40% Owed":       fmt_pkr(row.bachat_40pct) if is_u else "—",
+            "ABHI Release":          fmt_pkr(row.release_amount) if is_u else "—",
+            "Delta":                 (f"PKR {row.delta:+,.0f}" if is_u else "—"),
+            "Status":                "✅ UNLOCKED" if is_u else "⏳ PENDING",
         })
     st.dataframe(pd.DataFrame(ms_tbl), use_container_width=True, hide_index=True)
 
@@ -1139,8 +1162,9 @@ with tab3:
     fig.add_trace(go.Bar(x=df["Month"],y=df["Bachat Fee Share"],
         name="Bachat Fee Share",marker_color=C_GREEN,
         hovertemplate="M%{x}<br>Fee: PKR %{y:,.0f}<extra></extra>"))
-    fig.add_trace(go.Bar(x=df["Month"],y=df["Bachat Cap Gain (40%)"],
-        name=f"Bachat Cap Gain ({g['bachat_share']:.0f}%)",marker_color=C_LIME,
+    fig.add_trace(go.Bar(x=df["Month"],
+        y=df["Bachat Shared Net (40%)"] if "Bachat Shared Net (40%)" in df.columns else df.get("Bachat Cap Gain (40%)",0),
+        name=f"Bachat Shared Net ({g['bachat_share']:.0f}%)",marker_color=C_LIME,
         hovertemplate="M%{x}<br>Cap Gain: PKR %{y:,.0f}<extra></extra>"))
     fig.add_trace(go.Scatter(x=df["Month"],y=df["Cumulative Bachat Revenue"],
         name="Cumulative",line=dict(color=C_GOLD,width=2,dash="dot"),
@@ -1175,10 +1199,12 @@ with tab3:
     with cb:
         shdr("","ABHI vs Bachat Capital Gain Split")
         fig_s = go.Figure()
-        fig_s.add_trace(go.Bar(x=df["Month"],y=df["ABHI Cap Gain (60%)"],
-            name=f"ABHI {g['abhi_share']:.0f}%",marker_color=C_DARK))
-        fig_s.add_trace(go.Bar(x=df["Month"],y=df["Bachat Cap Gain (40%)"],
-            name=f"Bachat {g['bachat_share']:.0f}%",marker_color=C_LIME))
+        fig_s.add_trace(go.Bar(x=df["Month"],
+            y=df["ABHI Shared Net (60%)"] if "ABHI Shared Net (60%)" in df.columns else df.get("ABHI Cap Gain (60%)",0),
+            name=f"ABHI {g['abhi_share']:.0f}% Shared Net",marker_color=C_DARK))
+        fig_s.add_trace(go.Bar(x=df["Month"],
+            y=df["Bachat Shared Net (40%)"] if "Bachat Shared Net (40%)" in df.columns else df.get("Bachat Cap Gain (40%)",0),
+            name=f"Bachat {g['bachat_share']:.0f}% Shared Net",marker_color=C_LIME))
         layout_s = abhi_layout(280)
         layout_s["barmode"] = "stack"
         fig_s.update_layout(**layout_s)
@@ -1225,67 +1251,74 @@ with tab3:
 # TAB 4 — NII & REVENUE
 # ══════════════════════════════════════════════════════════════════════════════
 with tab4:
-    shdr("📊","NII Breakdown — Base + Fee + Pool Growth")
+    shdr("📊","Shared P&L — Capital Gain vs Default Loss")
+
     st.markdown("""
-    <div style="background:#F4F9F6;border:1px solid #D6EAE0;border-radius:10px;
-                padding:.8rem 1.2rem;font-size:.81rem;color:#1A2E22;line-height:1.8;margin-bottom:1rem">
-      <b style="color:#005C2B">Formula:</b>
-      NII = Principal × (SBP Rate ± Adj) × (Days / 365) using exact calendar days<br>
-      <b style="color:#005C2B">Base NII</b> — monthly deposits per slot held to payout &nbsp;·&nbsp;
-      <b style="color:#005C2B">Fee NII</b> — fees sitting in ABHI account &nbsp;·&nbsp;
-      <b style="color:#005C2B">Pool Growth NII</b> — full pool value from month 1
+    <div style="background:#E8F5EE;border:1px solid #7DC242;border-left:4px solid #00833E;
+                border-radius:10px;padding:.8rem 1.2rem;font-size:.81rem;
+                color:#1A2E22;line-height:1.9;margin-bottom:1rem">
+      <b style="color:#005C2B">Structure:</b><br>
+      Slot Fees → Bachat direct revenue (not in milestone mechanism)<br>
+      Cap Gain on Float → shared 60/40 via milestone releases<br>
+      Net Default Loss → shared 60/40, deducted from cap gain before release<br>
+      <b style="color:#005C2B">Milestone Release = Bachat 40% × (Cap Gain − Net Default Loss) since last milestone</b>
     </div>
     """, unsafe_allow_html=True)
 
     n1,n2,n3,n4 = st.columns(4)
-    n1.metric("Base NII",        fmt_pkr(df["Base NII"].sum()))
-    n2.metric("Fee NII",         fmt_pkr(df["Fee NII"].sum()))
-    n3.metric("Pool Growth NII", fmt_pkr(df["Pool Growth NII"].sum()))
-    n4.metric("Total NII",       fmt_pkr(df["Total NII"].sum()))
+    n1.metric("Total Cap Gain (ABHI)",
+              fmt_pkr(df["Monthly Cap Gain (Total)"].sum()))
+    n2.metric("Total Net Default Loss",
+              fmt_pkr(df["Net Default Loss"].sum()))
+    n3.metric("Total Shared Net",
+              fmt_pkr(df["Shared Net (CG − Def Loss)"].sum()) if "Shared Net (CG − Def Loss)" in df.columns else "—")
+    n4.metric("Bachat 40% of Shared Net",
+              fmt_pkr(df["Bachat Shared Net (40%)"].sum()) if "Bachat Shared Net (40%)" in df.columns else "—")
 
-    fig_nii = go.Figure()
-    for col,clr,nm in [
-        ("Base NII",       C_GREEN, "Base NII"),
-        ("Fee NII",        C_LIME,  "Fee NII"),
-        ("Pool Growth NII",C_GOLD,  "Pool Growth NII"),
-        ("Total NII",      C_DARK,  "Total NII"),
-    ]:
-        fig_nii.add_trace(go.Scatter(x=df["Month"],y=df[col],
-            name=nm,line=dict(color=clr,width=2.5 if nm=="Total NII" else 2)))
-    fig_nii.update_layout(**abhi_layout(360,"NII Components Over Time"))
-    st.plotly_chart(fig_nii, use_container_width=True)
+    # Cap Gain vs Default Loss chart
+    shdr("","Monthly: Cap Gain vs Default Loss vs Shared Net")
+    fig_pl = go.Figure()
+    fig_pl.add_trace(go.Bar(x=df["Month"],y=df["Monthly Cap Gain (Total)"],
+        name="Cap Gain (ABHI earns)",marker_color=C_GREEN))
+    fig_pl.add_trace(go.Bar(x=df["Month"],y=-df["Net Default Loss"],
+        name="Net Default Loss (shared)",marker_color=C_RED))
+    if "Shared Net (CG − Def Loss)" in df.columns:
+        fig_pl.add_trace(go.Scatter(x=df["Month"],y=df["Shared Net (CG − Def Loss)"],
+            name="Shared Net",line=dict(color=C_GOLD,width=2.5,dash="dot")))
+    layout_pl = abhi_layout(380,"Cap Gain vs Default Loss")
+    layout_pl["barmode"] = "relative"
+    fig_pl.update_layout(**layout_pl)
+    st.plotly_chart(fig_pl, use_container_width=True)
 
-    ca,cb = st.columns(2)
-    with ca:
-        shdr("","Revenue Components")
-        fig_rev = go.Figure()
-        fig_rev.add_trace(go.Bar(x=df["Month"],y=df["Gross Fee Income"],
-            name="Fee Income",marker_color=C_GREEN))
-        fig_rev.add_trace(go.Bar(x=df["Month"],y=df["Total NII"],
-            name="NII",marker_color=C_LIME))
-        fig_rev.add_trace(go.Bar(x=df["Month"],y=df["Default Penalty Fees"],
-            name="Default Penalties",marker_color=C_GOLD))
-        layout_rv = abhi_layout(300,"Total Revenue")
-        layout_rv["barmode"] = "stack"
-        fig_rev.update_layout(**layout_rv)
-        st.plotly_chart(fig_rev, use_container_width=True)
+    # Split chart
+    shdr("","ABHI vs Bachat Shared Net Split")
+    fig_split = go.Figure()
+    if "ABHI Shared Net (60%)" in df.columns:
+        fig_split.add_trace(go.Bar(x=df["Month"],y=df["ABHI Shared Net (60%)"],
+            name="ABHI 60%",marker_color=C_DARK))
+    if "Bachat Shared Net (40%)" in df.columns:
+        fig_split.add_trace(go.Bar(x=df["Month"],y=df["Bachat Shared Net (40%)"],
+            name="Bachat 40%",marker_color=C_LIME))
+    layout_sp = abhi_layout(300)
+    layout_sp["barmode"] = "stack"
+    fig_split.update_layout(**layout_sp)
+    st.plotly_chart(fig_split, use_container_width=True)
 
-    with cb:
-        shdr("","Default Impact")
-        fig_def = go.Figure()
-        fig_def.add_trace(go.Scatter(x=df["Month"],y=df["Net Default Loss"],
-            name="Net Default Loss",line=dict(color=C_RED,width=2)))
-        fig_def.add_trace(go.Scatter(x=df["Month"],y=df["Gross Profit"],
-            name="Gross Profit",line=dict(color=C_GREEN,width=2),
-            fill="tozeroy",fillcolor="rgba(0,131,62,0.07)"))
-        fig_def.update_layout(**abhi_layout(300,"Gross Profit vs Default Loss"))
-        st.plotly_chart(fig_def, use_container_width=True)
+    # Fee revenue (separate)
+    shdr("","Slot Fee Revenue — Bachat Direct (Outside Milestone)")
+    f1,f2,f3 = st.columns(3)
+    f1.metric("Total Gross Fees", fmt_pkr(df["Gross Fee Income"].sum()))
+    f2.metric("ABHI Fee Share (60%)", fmt_pkr(df["ABHI Fee Share (60%)"].sum()) if "ABHI Fee Share (60%)" in df.columns else "—")
+    f3.metric("Bachat Fee Share (40%)", fmt_pkr(df["Bachat Fee Share (40%)"].sum()) if "Bachat Fee Share (40%)" in df.columns else "—")
 
-    shdr("","Full Monthly Table")
-    full = df[["Month","Gross Fee Income","Total NII","Default Penalty Fees",
-               "Total Revenue","Net Default Loss","Gross Profit",
-               "ABHI Fee Share","Bachat Fee Share",
-               "ABHI Cap Gain (60%)","Bachat Cap Gain (40%)"]].copy()
+    shdr("","Full Monthly P&L Table")
+    show_cols = ["Month","Total Float (PKR)","Gross Fee Income",
+                 "Bachat Fee Share (40%)","Monthly Cap Gain (Total)",
+                 "Net Default Loss","Shared Net (CG − Def Loss)",
+                 "ABHI Shared Net (60%)","Bachat Shared Net (40%)",
+                 "Total Bachat Revenue","Cumulative Bachat Revenue"]
+    show_cols = [c for c in show_cols if c in df.columns]
+    full = df[show_cols].copy()
     for c in full.columns[1:]:
         full[c] = full[c].apply(lambda x: f"PKR {x:,.0f}")
     st.dataframe(full, use_container_width=True, hide_index=True)
