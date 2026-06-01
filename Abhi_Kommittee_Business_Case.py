@@ -1000,7 +1000,7 @@ with tab3:
     with ca:
         shdr("","Float & Cap Gain Growth")
         fig_f = go.Figure()
-        fig_f.add_trace(go.Area(x=df["Month"],y=df["Total Float (PKR)"],
+        fig_f.add_trace(go.Scatter(x=df["Month"],y=df["Total Float (PKR)"],
             name="Float",line=dict(color=C_GREEN,width=2),
             fillcolor="rgba(0,131,62,0.08)"))
         fig_f.add_trace(go.Scatter(x=df["Month"],y=df["Monthly Cap Gain (Total)"],
