@@ -822,7 +822,7 @@ with tab1:
     total_cg_all  = df["Monthly Cap Gain (Total)"].sum()
     total_b40     = df["Bachat Shared Net (40%)"].sum() if "Bachat Shared Net (40%)" in df.columns else 0
     total_rel     = unlocked["bachat_40pct"].sum() if not unlocked.empty else 0
-    total_fee     = df["Bachat Fee Share"].sum()
+    total_fee     = df["Bachat Fee Share (40%)"].sum()
     shortfall     = total_b40 - total_rel
 
     shdr("📌","Capital Gain Release Summary")
@@ -1141,11 +1141,11 @@ with tab3:
 
     shdr("📈","Monthly Revenue")
     fig = make_subplots(specs=[[{"secondary_y":True}]])
-    fig.add_trace(go.Bar(x=df["Month"],y=df["Bachat Fee Share"],
-        name="Bachat Fee Share",marker_color=C_GREEN,
+    fig.add_trace(go.Bar(x=df["Month"],y=df["Bachat Fee Share (40%)"],
+        name="Bachat Fee Share (40%)",marker_color=C_GREEN,
         hovertemplate="M%{x}<br>Fee: PKR %{y:,.0f}<extra></extra>"))
     fig.add_trace(go.Bar(x=df["Month"],
-        y=df["Bachat Shared Net (40%)"] if "Bachat Shared Net (40%)" in df.columns else df.get("Bachat Cap Gain (40%)",0),
+        y=df["Bachat Shared Net (40%)"] if "Bachat Shared Net (40%)" in df.columns else df.get("Bachat Shared Net (40%)",0),
         name=f"Bachat Shared Net ({g['bachat_share']:.0f}%)",marker_color=C_LIME,
         hovertemplate="M%{x}<br>Cap Gain: PKR %{y:,.0f}<extra></extra>"))
     fig.add_trace(go.Scatter(x=df["Month"],y=df["Cumulative Bachat Revenue"],
@@ -1182,10 +1182,10 @@ with tab3:
         shdr("","ABHI vs Bachat Capital Gain Split")
         fig_s = go.Figure()
         fig_s.add_trace(go.Bar(x=df["Month"],
-            y=df["ABHI Shared Net (60%)"] if "ABHI Shared Net (60%)" in df.columns else df.get("ABHI Cap Gain (60%)",0),
+            y=df["ABHI Shared Net (60%)"] if "ABHI Shared Net (60%)" in df.columns else df.get("ABHI Shared Net (60%)",0),
             name=f"ABHI {g['abhi_share']:.0f}% Shared Net",marker_color=C_DARK))
         fig_s.add_trace(go.Bar(x=df["Month"],
-            y=df["Bachat Shared Net (40%)"] if "Bachat Shared Net (40%)" in df.columns else df.get("Bachat Cap Gain (40%)",0),
+            y=df["Bachat Shared Net (40%)"] if "Bachat Shared Net (40%)" in df.columns else df.get("Bachat Shared Net (40%)",0),
             name=f"Bachat {g['bachat_share']:.0f}% Shared Net",marker_color=C_LIME))
         layout_s = abhi_layout(280)
         layout_s["barmode"] = "stack"
@@ -1222,8 +1222,8 @@ with tab3:
 
     shdr("","Monthly Detail Table")
     disp = df[["Month","Cumulative Pools","Total Float (PKR)",
-               "Monthly Cap Gain (Total)","Bachat Cap Gain (40%)",
-               "Bachat Fee Share","Total Bachat Revenue",
+               "Monthly Cap Gain (Total)","Bachat Shared Net (40%)",
+               "Bachat Fee Share (40%)","Total Bachat Revenue",
                "Cumulative Bachat Revenue"]].copy()
     for c in disp.columns[2:]:
         disp[c] = disp[c].apply(lambda x: f"PKR {x:,.0f}")
