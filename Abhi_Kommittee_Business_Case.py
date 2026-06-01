@@ -537,80 +537,59 @@ def compute_forecast(templates, glob, months):
             # NII — 3 components
             bn = fn = pgn = 0.0
             for s in paying:
-                pay_m = m + s
-                dp    = cp * con
-                fa    = slts[s]["fee_pct"]/100 * pv * cp
-                dh    = held_days_exact(m, pay_m, dd, pd_)
-                r     = net_rate/100
-                bn   += dp   * r * (dh/365)
-                fn   += fa   * r * (dh/365)
-                pgn  += total_float_t * r * (dh/365)
-            total_nii_t = bn + fn + pgn
+                pass  # NII removed — cap gain used directly
 
-            # Capital gain — simple monthly accrual on full float
+            # ── Cap gain on float (shared 60/40) ─────────────────────
             cg_t = total_float_t * (net_rate/100) / 12
 
-            # Defaults
-            tot_def = (total_deposits * def_rate * def_pre +
-                       total_deposits * def_rate * def_post)
-            rec     = tot_def * rec_r
-            net_def = tot_def - rec
-            def_f   = tot_def * pen_pct
+            # ── Default loss (shared 60/40) ───────────────────────────
+            tot_def     = (total_deposits*def_rate*def_pre +
+                           total_deposits*def_rate*def_post)
+            net_def     = tot_def - tot_def*rec_r
+            def_f       = tot_def * pen_pct
 
-            # Revenue
-            rev_t    = gf + total_nii_t + def_f
-            profit_t = rev_t - net_def
+            # ── Shared net = cap gain minus net default loss ──────────
+            shared_net_t = cg_t - net_def
 
             agg["cum_pools"]      += cp
             agg["paying_members"] += cp * len(paying)
             agg["total_float"]    += total_float_t
             agg["gross_fee"]      += gf
-            agg["base_nii"]       += bn
-            agg["fee_nii"]        += fn
-            agg["pg_nii"]         += pgn
-            agg["total_nii"]      += total_nii_t
             agg["total_cg"]       += cg_t
-            agg["def_loss"]       += tot_def
             agg["net_def_loss"]   += net_def
             agg["def_fees"]       += def_f
-            agg["total_rev"]      += rev_t
-            agg["gross_profit"]   += profit_t
-            agg["abhi_fee"]       += gf   * abhi_s
-            agg["bachat_fee"]     += gf   * bachat_s
-            agg["abhi_cg"]        += cg_t * abhi_s
-            agg["bachat_cg"]      += cg_t * bachat_s
-            agg["total_bachat"]   += (gf + cg_t) * bachat_s
+            agg["shared_net"]     += shared_net_t
+            agg["abhi_fee"]       += gf          * abhi_s
+            agg["bachat_fee"]     += gf          * bachat_s
+            agg["abhi_shared"]    += shared_net_t * abhi_s
+            agg["bachat_shared"]  += shared_net_t * bachat_s
+            agg["total_bachat"]   += gf*bachat_s + shared_net_t*bachat_s
 
-        cg_by_month[m] = agg["total_cg"]
+        cg_by_month[m]  = agg["total_cg"]
+        def_by_month[m] = agg["net_def_loss"]
         cum_bachat += agg["total_bachat"]
-
         rows.append({
-            "Month":                    m,
-            "Active Pools":             agg["cum_pools"],
-            "Cumulative Pools":          cum_active_pools,
-            "New Users":                user_lc["new_users"].get(m, 0),
-            "Returning Users":          user_lc["returning_users"].get(m, 0),
-            "Resting Users":            user_lc["resting_users"].get(m, 0),
-            "Active Users":             user_lc["active_users"].get(m, 0),
-            "Total Users to Date":      user_lc["total_users"].get(m, 0),
-            "Paying Members":           agg["paying_members"],
-            "Total Float (PKR)":        agg["total_float"],
-            "Gross Fee Income":         agg["gross_fee"],
-            "Base NII":                 agg["base_nii"],
-            "Fee NII":                  agg["fee_nii"],
-            "Pool Growth NII":          agg["pg_nii"],
-            "Total NII":                agg["total_nii"],
-            "Monthly Cap Gain (Total)": agg["total_cg"],
-            "ABHI Cap Gain (60%)":      agg["abhi_cg"],
-            "Bachat Cap Gain (40%)":    agg["bachat_cg"],
-            "Net Default Loss":         agg["net_def_loss"],
-            "Default Penalty Fees":     agg["def_fees"],
-            "Total Revenue":            agg["total_rev"],
-            "Gross Profit":             agg["gross_profit"],
-            "ABHI Fee Share":           agg["abhi_fee"],
-            "Bachat Fee Share":         agg["bachat_fee"],
-            "Total Bachat Revenue":     agg["total_bachat"],
-            "Cumulative Bachat Revenue":cum_bachat,
+            "Month":                        m,
+            "Active Pools":                 agg["cum_pools"],
+            "Cumulative Pools":             cum_active_pools,
+            "New Users":                    user_lc["new_users"].get(m, 0),
+            "Returning Users":              user_lc["returning_users"].get(m, 0),
+            "Resting Users":                user_lc["resting_users"].get(m, 0),
+            "Active Users":                 user_lc["active_users"].get(m, 0),
+            "Total Users to Date":          user_lc["total_users"].get(m, 0),
+            "Paying Members":               agg["paying_members"],
+            "Total Float (PKR)":            agg["total_float"],
+            "Gross Fee Income":             agg["gross_fee"],
+            "ABHI Fee Share (60%)":         agg["abhi_fee"],
+            "Bachat Fee Share (40%)":       agg["bachat_fee"],
+            "Monthly Cap Gain (Total)":     agg["total_cg"],
+            "Net Default Loss":             agg["net_def_loss"],
+            "Default Penalty Fees":         agg["def_fees"],
+            "Shared Net (CG − Def Loss)":   agg["shared_net"],
+            "ABHI Shared Net (60%)":        agg["abhi_shared"],
+            "Bachat Shared Net (40%)":      agg["bachat_shared"],
+            "Total Bachat Revenue":         agg["total_bachat"],
+            "Cumulative Bachat Revenue":    cum_bachat,
         })
 
     df = pd.DataFrame(rows)
