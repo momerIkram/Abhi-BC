@@ -510,6 +510,7 @@ def compute_forecast(templates, glob, months):
     cum_bachat  = 0.0
     cg_by_month = {}
     def_by_month = {}
+    cum_active_pools = 0
     rows, ms_rows = [], []
 
     for m in range(1, months+1):
@@ -569,6 +570,7 @@ def compute_forecast(templates, glob, months):
         cg_by_month[m]  = agg["total_cg"]
         def_by_month[m] = agg["net_def_loss"]
         cum_bachat += agg["total_bachat"]
+        cum_active_pools = max(cum_active_pools, agg["cum_pools"])
         rows.append({
             "Month":                        m,
             "Active Pools":                 agg["cum_pools"],
