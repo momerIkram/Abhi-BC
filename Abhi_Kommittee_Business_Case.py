@@ -8,6 +8,85 @@ from calendar import monthrange
 from copy import deepcopy
 import warnings
 warnings.filterwarnings('ignore')
+import math
+
+# ── User Lifecycle Engine (from BC_EP logic) ──────────────────────────────────
+def calculate_user_lifecycle(starting_users, monthly_growth_rate_pct,
+                              rest_period_months, returning_user_rate_pct,
+                              churn_rate_pct, duration, months):
+    """
+    Cohort-based user lifecycle tracking.
+    
+    Each month:
+      total_users[m]     = total_users[m-1] × (1 + growth_rate)
+      new_users[m]       = total_users[m] - total_users[m-1]
+      returning_users[m] = cohort that finished cycle + rest period
+      resting_users[m]   = cohort that just finished their cycle (cooling off)
+      active_users[m]    = new_users + returning_users  → drives pool count
+    """
+    gr   = monthly_growth_rate_pct / 100
+    ret  = returning_user_rate_pct / 100
+    churn = churn_rate_pct / 100
+    max_m = max(months, 60)
+
+    total_u    = {}
+    new_u      = {}
+    returning_u = {}
+    resting_u  = {}
+    active_u   = {}
+    return_schedule = {}
+
+    # Month 1 — seed
+    total_u[1]     = starting_users
+    new_u[1]       = starting_users
+    returning_u[1] = 0
+    resting_u[1]   = 0
+    active_u[1]    = starting_users
+
+    # Schedule first cohort return
+    rm = 1 + duration + rest_period_months
+    if rm <= max_m:
+        return_schedule[rm] = int(starting_users * ret * (1 - churn))
+
+    for m in range(2, max_m + 1):
+        total_u[m]      = int(total_u[m-1] * (1 + gr))
+        new_u[m]        = total_u[m] - total_u[m-1]
+        returning_u[m]  = return_schedule.get(m, 0)
+
+        # Resting: cohort that started (m - duration) months ago just finished
+        if m > duration:
+            start_m = m - duration
+            resting_u[m] = new_u.get(start_m, 0)
+            rm2 = m + rest_period_months
+            if rm2 <= max_m:
+                return_schedule[rm2] = int(new_u.get(start_m, 0) * ret * (1 - churn))
+        else:
+            resting_u[m] = 0
+
+        active_u[m] = new_u[m] + returning_u[m]
+
+    return {
+        'total_users':     total_u,
+        'new_users':       new_u,
+        'returning_users': returning_u,
+        'resting_users':   resting_u,
+        'active_users':    active_u,
+    }
+
+def build_pool_schedule(months, starting_users, monthly_growth_rate_pct,
+                        rest_period_months, returning_user_rate_pct,
+                        churn_rate_pct, users_per_pool, duration):
+    """
+    Convert active_users → cumulative pool count each month.
+    pools[m] = active_users[m] / users_per_pool  (floor)
+    """
+    lc = calculate_user_lifecycle(
+        starting_users, monthly_growth_rate_pct,
+        rest_period_months, returning_user_rate_pct,
+        churn_rate_pct, duration, months)
+    return [max(1, lc['active_users'].get(m, 1) // users_per_pool)
+            for m in range(1, months+1)], lc
+
 
 st.set_page_config(
     page_title="Bachat × ABHI Microfinance Bank — Revenue Model",
@@ -412,7 +491,21 @@ def compute_forecast(templates, glob, months):
     milestones = sorted(glob["milestones"], key=lambda x: x["pools"])
 
     active = [t for t in templates if t["active"]]
-    cum_by_tmpl = {i:0 for i in range(len(active))}
+
+    # Build user lifecycle schedule → pool counts
+    # One shared lifecycle drives all templates (active users / users_per_pool)
+    pool_schedule, user_lc = build_pool_schedule(
+        months,
+        glob["starting_users"],
+        glob["monthly_growth_rate"],
+        glob["rest_period_months"],
+        glob["returning_user_rate"],
+        glob["churn_rate"],
+        glob["users_per_pool"],
+        glob["pool_duration"],
+    )
+    schedules = {ti: pool_schedule for ti in range(len(active))}
+
     ms_unlocked = set()
     cum_bachat  = 0.0
     cg_by_month = {}
@@ -426,8 +519,7 @@ def compute_forecast(templates, glob, months):
                    abhi_fee=0, bachat_fee=0, abhi_cg=0, bachat_cg=0, total_bachat=0)
 
         for ti, tmpl in enumerate(active):
-            cum_by_tmpl[ti] += tmpl["pools_per_month"]
-            cp   = cum_by_tmpl[ti]
+            cp   = schedules[ti][m-1]
             sz   = tmpl["size"]
             con  = tmpl["contrib"]
             slts = tmpl["slots"]
@@ -494,7 +586,13 @@ def compute_forecast(templates, glob, months):
 
         rows.append({
             "Month":                    m,
-            "Cumulative Pools":         agg["cum_pools"],
+            "Active Pools":             agg["cum_pools"],
+            "Cumulative Pools":          cum_active_pools,
+            "New Users":                user_lc["new_users"].get(m, 0),
+            "Returning Users":          user_lc["returning_users"].get(m, 0),
+            "Resting Users":            user_lc["resting_users"].get(m, 0),
+            "Active Users":             user_lc["active_users"].get(m, 0),
+            "Total Users to Date":      user_lc["total_users"].get(m, 0),
             "Paying Members":           agg["paying_members"],
             "Total Float (PKR)":        agg["total_float"],
             "Gross Fee Income":         agg["gross_fee"],
@@ -546,7 +644,7 @@ def compute_forecast(templates, glob, months):
 # ── Session state ──────────────────────────────────────────────────────────────
 def default_template(name="Pool A", size=10, contrib=10000):
     fr = {1:0,2:0,3:6,4:5,5:4,6:3,7:2,8:1,9:0.5,10:0}
-    return {"name":name,"size":size,"contrib":contrib,"pools_per_month":5,
+    return {"name":name,"size":size,"contrib":contrib,
             "slots":{s:{"blocked":s<=2,"fee_pct":fr.get(s,2.0)} for s in range(1,size+1)},
             "active":True}
 
@@ -558,6 +656,10 @@ if "global" not in st.session_state:
         "sbp_rate":22.0,"rate_adj":2.0,"rate_adj_sign":"plus",
         "abhi_share":60.0,"bachat_share":40.0,
         "forecast_months":24,"fee_mode":"Monthly",
+        "tam":5000000,"sam":500000,"som":10000,
+        "starting_users":1000,"monthly_growth_rate":5.0,
+        "rest_period_months":1,"returning_user_rate":80.0,
+        "churn_rate":20.0,"users_per_pool":10,"pool_duration":10,
         "deposit_day":1,"payout_day":15,
         "default_rate":2.0,"default_pre_pct":30.0,"default_post_pct":70.0,
         "penalty_pct":2.0,"recovery_rate":50.0,"ms_auto":True,
@@ -623,6 +725,63 @@ with st.sidebar:
 
     st.divider()
     g["forecast_months"] = st.slider("Forecast Horizon (months)",6,60,g["forecast_months"],6)
+
+    st.divider()
+    st.markdown('<p style="color:#005C2B;font-weight:700;font-size:.75rem;text-transform:uppercase;letter-spacing:.06em">📊 Market Sizing (TAM / SAM / SOM)</p>', unsafe_allow_html=True)
+    g["tam"] = st.number_input("TAM — Total Committees (Pakistan)", 100000, 50000000,
+                                g.get("tam",5000000), 100000, format="%d",
+                                help="Total informal committees running in Pakistan")
+    g["sam"] = st.number_input("SAM — Serviceable (ABHI reach)", 1000, g["tam"],
+                                min(g.get("sam",500000), g["tam"]), 10000, format="%d",
+                                help="Committees reachable via ABHI network")
+    g["som"] = st.number_input("SOM — Target (Bachat capture)", 100, g["sam"],
+                                min(g.get("som",10000), g["sam"]), 500, format="%d",
+                                help="Pools Bachat realistically captures = S-curve ceiling")
+    som_pct = g["som"] / g["tam"] * 100
+    sam_pct = g["sam"] / g["tam"] * 100
+    st.markdown(
+        f'<div style="background:#E8F5EE;border-radius:8px;padding:.6rem .9rem;font-size:.75rem;color:#1A2E22;margin-top:.3rem">' 
+        f'SAM = <b>{sam_pct:.1f}%</b> of TAM &nbsp;·&nbsp; SOM = <b>{som_pct:.2f}%</b> of TAM' 
+        f'<br>SOM = <b style="color:#00833E">{g["som"]:,} pools</b> (S-curve ceiling)</div>',
+        unsafe_allow_html=True)
+
+    st.divider()
+    st.markdown('<p style="color:#005C2B;font-weight:700;font-size:.75rem;text-transform:uppercase;letter-spacing:.06em">📈 User Growth & Lifecycle</p>', unsafe_allow_html=True)
+    g["starting_users"]       = st.number_input("Starting Users (Month 1)", 10, 1000000,
+                                                  g.get("starting_users",1000), 100, format="%d",
+                                                  help="Seed user base at launch")
+    g["monthly_growth_rate"]  = st.slider("Monthly Growth Rate %", 0.5, 50.0,
+                                           g.get("monthly_growth_rate",5.0), 0.5,
+                                           help="Month-on-month % growth in total user base")
+    g["users_per_pool"]       = st.number_input("Users per Pool (pool size)", 4, 50,
+                                                  g.get("users_per_pool",10), 1,
+                                                  help="How many active users form one pool")
+    g["pool_duration"]        = st.number_input("Pool Duration (months)", 4, 24,
+                                                  g.get("pool_duration",10), 1,
+                                                  help="Length of one committee cycle")
+    st.divider()
+    st.markdown('<p style="color:#005C2B;font-weight:700;font-size:.75rem;text-transform:uppercase;letter-spacing:.06em">🔄 User Retention & Churn</p>', unsafe_allow_html=True)
+    g["rest_period_months"]   = st.slider("Rest Period (months after cycle)", 0, 6,
+                                           g.get("rest_period_months",1), 1,
+                                           help="How long users wait before rejoining")
+    g["returning_user_rate"]  = st.slider("Returning User Rate %", 0.0, 100.0,
+                                           g.get("returning_user_rate",80.0), 5.0,
+                                           help="% of completed users who rejoin")
+    g["churn_rate"]           = st.slider("Churn Rate %", 0.0, 100.0,
+                                           g.get("churn_rate",20.0), 5.0,
+                                           help="% of users who leave permanently")
+    # Live preview
+    _ps, _lc = build_pool_schedule(
+        g["forecast_months"], g["starting_users"], g["monthly_growth_rate"],
+        g["rest_period_months"], g["returning_user_rate"], g["churn_rate"],
+        g["users_per_pool"], g["pool_duration"])
+    _mid = g["forecast_months"]//2
+    st.markdown(
+        f'<div style="background:#E8F5EE;border-radius:8px;padding:.6rem .9rem;font-size:.75rem;color:#1A2E22;line-height:1.8">' 
+        f'<b>M1:</b> {_lc["active_users"].get(1,0):,} active users → <b>{_ps[0]:,} pools</b><br>' 
+        f'<b>M{_mid}:</b> {_lc["active_users"].get(_mid,0):,} users → <b>{_ps[_mid-1]:,} pools</b><br>' 
+        f'<b>M{g["forecast_months"]}:</b> {_lc["active_users"].get(g["forecast_months"],0):,} users → <b>{_ps[-1]:,} pools</b>' 
+        f'</div>', unsafe_allow_html=True)
 
     st.divider()
     st.markdown('<p style="color:#005C2B;font-weight:700;font-size:.75rem;text-transform:uppercase;letter-spacing:.06em">🏆 Milestone Targets</p>', unsafe_allow_html=True)
@@ -903,8 +1062,10 @@ with tab2:
                 sel  = st.selectbox("Monthly Contrib / Slot",lbls,index=idx,key=f"ct_{ti}")
                 tmpl["contrib"] = opts[lbls.index(sel)]
             with c3:
-                tmpl["pools_per_month"] = st.number_input(
-                    "New Pools / Month",1,500,tmpl["pools_per_month"],1,key=f"ppm_{ti}")
+                st.markdown(
+                    '<div style="background:#E8F5EE;border-radius:8px;padding:.7rem;font-size:.75rem;color:#005C2B;margin-top:1.6rem">' 
+                    '📈 Growth driven by S-Curve<br><span style="color:#6B8F79">SOM ceiling set in sidebar</span>' 
+                    '</div>', unsafe_allow_html=True)
             with c4:
                 db = st.number_input("Default Blocked (first N slots)",0,tmpl["size"],2,1,key=f"db_{ti}")
                 if st.button("Apply Default",key=f"ap_{ti}",
@@ -1022,6 +1183,34 @@ with tab3:
         layout_s["barmode"] = "stack"
         fig_s.update_layout(**layout_s)
         st.plotly_chart(fig_s, use_container_width=True)
+
+    shdr("👥","User Lifecycle — New · Returning · Resting · Churn")
+    if "New Users" in df.columns:
+        fig_ul = go.Figure()
+        fig_ul.add_trace(go.Bar(x=df["Month"], y=df["New Users"],
+            name="New Users", marker_color=C_GREEN))
+        fig_ul.add_trace(go.Bar(x=df["Month"], y=df["Returning Users"],
+            name="Returning Users", marker_color=C_LIME))
+        fig_ul.add_trace(go.Bar(x=df["Month"], y=df["Resting Users"],
+            name="Resting (Between Cycles)", marker_color="#B0BEC5"))
+        fig_ul.add_trace(go.Scatter(x=df["Month"], y=df["Total Users to Date"],
+            name="Total Users to Date", line=dict(color=C_GOLD, width=2.5, dash="dot"),
+            yaxis="y2"))
+        layout_ul = abhi_layout(360)
+        layout_ul.update(barmode="stack",
+            yaxis2=dict(title="Total Users", overlaying="y", side="right",
+                        gridcolor="rgba(0,0,0,0)"))
+        fig_ul.update_layout(**layout_ul)
+        st.plotly_chart(fig_ul, use_container_width=True)
+
+        # Lifecycle KPIs
+        lk = st.columns(5)
+        lk[0].metric("Peak Active Users", f"{df['Active Users'].max():,}")
+        lk[1].metric("Total New Users", f"{df['New Users'].sum():,}")
+        lk[2].metric("Total Returning", f"{df['Returning Users'].sum():,}")
+        lk[3].metric("Total Resting", f"{df['Resting Users'].sum():,}")
+        ret_rate = (df["Returning Users"].sum() / max(df["New Users"].sum(),1) * 100)
+        lk[4].metric("Effective Retention", f"{ret_rate:.1f}%")
 
     shdr("","Monthly Detail Table")
     disp = df[["Month","Cumulative Pools","Total Float (PKR)",
