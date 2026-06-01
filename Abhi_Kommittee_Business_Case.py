@@ -509,6 +509,7 @@ def compute_forecast(templates, glob, months):
     ms_unlocked = set()
     cum_bachat  = 0.0
     cg_by_month = {}
+    def_by_month = {}
     rows, ms_rows = [], []
 
     for m in range(1, months+1):
